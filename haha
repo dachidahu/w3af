@@ -1,0 +1,115 @@
+diff --git a/profiles/fast_scan.pw3af b/profiles/fast_scan.pw3af
+index d48f28c..311d48b 100644
+--- a/profiles/fast_scan.pw3af
++++ b/profiles/fast_scan.pw3af
+@@ -25,7 +25,7 @@ msf_location = /opt/metasploit3/bin/
+ [grep.oracle]
+ 
+ [output.console]
+-verbose = False
++verbose = True
+ 
+ [grep.motw]
+ 
+diff --git a/w3af/core/ui/api/resources/kb.py b/w3af/core/ui/api/resources/kb.py
+index d7661ad..52f845c 100644
+--- a/w3af/core/ui/api/resources/kb.py
++++ b/w3af/core/ui/api/resources/kb.py
+@@ -27,7 +27,7 @@ from w3af.core.ui.api import app
+ from w3af.core.ui.api.utils.error import abort
+ from w3af.core.ui.api.utils.auth import requires_auth
+ from w3af.core.ui.api.utils.scans import get_scan_info_from_id
+-
++from scan_cache import *
+ 
+ @app.route('/scans/<int:scan_id>/kb/', methods=['GET'])
+ @requires_auth
+@@ -53,6 +53,9 @@ def list_kb(scan_id):
+         - Location A
+         - Location B
+     """
++    scanData = scanGetWithScanId(scan_id)
++    if scanData != None:
++	return jsonify({'items': scanData.scanResult})
+     scan_info = get_scan_info_from_id(scan_id)
+     if scan_info is None:
+         abort(404, 'Scan not found')
+@@ -62,7 +65,6 @@ def list_kb(scan_id):
+     for finding_id, finding in enumerate(kb.kb.get_all_findings()):
+         if matches_filter(finding, request):
+             data.append(finding_to_json(finding, scan_id, finding_id))
+-
+     return jsonify({'items': data})
+ 
+ 
+diff --git a/w3af/core/ui/api/resources/scans.py b/w3af/core/ui/api/resources/scans.py
+index e8906e4..bdd36b5 100644
+--- a/w3af/core/ui/api/resources/scans.py
++++ b/w3af/core/ui/api/resources/scans.py
+@@ -34,7 +34,7 @@ from w3af.core.ui.api.utils.scans import (get_scan_info_from_id,
+ from w3af.core.data.parsers.doc.url import URL
+ from w3af.core.controllers.w3afCore import w3afCore
+ from w3af.core.controllers.exceptions import BaseFrameworkException
+-
++from scan_cache import *
+ 
+ @app.route('/scans/', methods=['POST'])
+ @requires_auth
+@@ -59,16 +59,32 @@ def start_scan():
+     scan_profile = request.json['scan_profile']
+     target_urls = request.json['target_urls']
+ 
++    if (not len(target_urls)) or len(target_urls) > 1:
++	abort(400, 'Invalid URL: "%s"' % target_url)
++    
++    scanResult = None
++    for target_url in target_urls:
++        try:
++            URL(target_url)
++	    scanResult = scanGet(target_url)
++        except ValueError:
++            abort(400, 'Invalid URL: "%s"' % target_url)
++
++    if scanResult != None:
++	return jsonify({'message': 'Success',
++        	'id': scanResult.scanId,
++                'href': '/scans/%s' % scanResult.scanId}), 201
+     #
+     # First make sure that there are no other scans running, remember that this
+     # REST API is an MVP and we can only run one scan at the time (for now)
+     #
+     scan_infos = SCANS.values()
++    """
+     if not all([si is None for si in scan_infos]):
+         abort(400, 'This version of the REST API does not support'
+                    ' concurrent scans. Remember to DELETE finished scans'
+                    ' before starting a new one.')
+-
++    """
+     #
+     # Before trying to start a new scan we verify that the scan profile is
+     # valid and return an informative error if it's not
+@@ -85,14 +101,6 @@ def start_scan():
+     #
+     # Now that we know that the profile is valid I verify the scan target info
+     #
+-    if not len(target_urls):
+-        abort(400, 'No target URLs specified')
+-
+-    for target_url in target_urls:
+-        try:
+-            URL(target_url)
+-        except ValueError:
+-            abort(400, 'Invalid URL: "%s"' % target_url)
+ 
+     target_options = w3af_core.target.get_options()
+     target_option = target_options['target']
+@@ -116,7 +124,7 @@ def start_scan():
+ 
+     # Wait until the thread starts
+     scan_info_setup.wait()
+-
++    scanAddId(scan_id, target_urls[0])
+     return jsonify({'message': 'Success',
+                     'id': scan_id,
+                     'href': '/scans/%s' % scan_id}), 201

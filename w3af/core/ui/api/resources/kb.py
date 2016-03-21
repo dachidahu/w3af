@@ -27,7 +27,9 @@ from w3af.core.ui.api import app
 from w3af.core.ui.api.utils.error import abort
 from w3af.core.ui.api.utils.auth import requires_auth
 from w3af.core.ui.api.utils.scans import get_scan_info_from_id
-
+from w3af.core.ui.api.db.master import SCANS
+from scan_cache import *
+from urlparse import urlparse
 
 @app.route('/scans/<int:scan_id>/kb/', methods=['GET'])
 @requires_auth
@@ -53,16 +55,33 @@ def list_kb(scan_id):
         - Location A
         - Location B
     """
+    scanData = scanGetWithScanId(scan_id)
+    if scanData != None and scanData.scanResult != None:
+	return jsonify({'items': scanData.scanResult})
     scan_info = get_scan_info_from_id(scan_id)
     if scan_info is None:
         abort(404, 'Scan not found')
 
     data = []
-
+    print 'hostname', urlparse(scanGetUrl(scan_id)).hostname
+    hostname = urlparse(scanGetUrl(scan_id)).hostname
     for finding_id, finding in enumerate(kb.kb.get_all_findings()):
-        if matches_filter(finding, request):
+	if finding.get_url() == None:
+		continue;
+        if matches_filter(finding, request) and urlparse(finding.get_url().url_string).hostname==hostname:
             data.append(finding_to_json(finding, scan_id, finding_id))
 
+    for id, scan_info in SCANS.iteritems():
+
+        if scan_info is None:
+            continue
+
+        target_urls = scan_info.target_urls
+        status = scan_info.w3af_core.status.get_simplified_status()
+        errors = True if scan_info.exception is not None else False
+	
+	if (errors == False and scan_id == id and status == 'Stopped'):
+		scanData.scanResult = data	
     return jsonify({'items': data})
 
 
@@ -151,5 +170,5 @@ def finding_to_json(finding, scan_id, finding_id, detailed=False):
 
         summary.update({'name': finding.get_name(),
                         'url': url})
-
+	
     return summary

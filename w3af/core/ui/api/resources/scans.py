@@ -34,7 +34,7 @@ from w3af.core.ui.api.utils.scans import (get_scan_info_from_id,
 from w3af.core.data.parsers.doc.url import URL
 from w3af.core.controllers.w3afCore import w3afCore
 from w3af.core.controllers.exceptions import BaseFrameworkException
-
+from scan_cache import *
 
 @app.route('/scans/', methods=['POST'])
 @requires_auth
@@ -50,29 +50,47 @@ def start_scan():
         - The URL to the newly created scan (eg. /scans/1)
         - The newly created scan ID (eg. 1)
     """
-    if not request.json or not 'scan_profile' in request.json:
-        abort(400, 'Expected scan_profile in JSON object')
+    #if not request.json or not 'scan_profile' in request.json:
+    #    abort(400, 'Expected scan_profile in JSON object')
 
     if not request.json or not 'target_urls' in request.json:
         abort(400, 'Expected target_urls in JSON object')
 
-    scan_profile = request.json['scan_profile']
+    scan_profile = file('fast_scan.pw3af').read()
     target_urls = request.json['target_urls']
 
+    if (not len(target_urls)) or len(target_urls) > 1:
+	abort(400, 'Invalid URL: "%s"' % target_url)
+    
+    scanResult = None
+    for target_url in target_urls:
+        try:
+            URL(target_url)
+	    scanResult = scanGet(target_url)
+        except ValueError:
+            abort(400, 'Invalid URL: "%s"' % target_url)
+
+    if scanResult != None:
+	return jsonify({'message': 'Success',
+        	'id': scanResult.scanId,
+                'href': '/scans/%s' % scanResult.scanId}), 201
     #
     # First make sure that there are no other scans running, remember that this
     # REST API is an MVP and we can only run one scan at the time (for now)
     #
     scan_infos = SCANS.values()
+    """
     if not all([si is None for si in scan_infos]):
         abort(400, 'This version of the REST API does not support'
                    ' concurrent scans. Remember to DELETE finished scans'
                    ' before starting a new one.')
-
+    """
     #
     # Before trying to start a new scan we verify that the scan profile is
     # valid and return an informative error if it's not
     #
+    #scan_profile_file_name = 'fast_scan.pw3af'
+    #profiles_path = '../../../../../profiles/'
     scan_profile_file_name, profile_path = create_temp_profile(scan_profile)
     w3af_core = w3afCore()
 
@@ -85,14 +103,6 @@ def start_scan():
     #
     # Now that we know that the profile is valid I verify the scan target info
     #
-    if not len(target_urls):
-        abort(400, 'No target URLs specified')
-
-    for target_url in target_urls:
-        try:
-            URL(target_url)
-        except ValueError:
-            abort(400, 'Invalid URL: "%s"' % target_url)
 
     target_options = w3af_core.target.get_options()
     target_option = target_options['target']
@@ -111,12 +121,11 @@ def start_scan():
     args = (target_urls, scan_profile, scan_info_setup)
     t = Process(target=start_scan_helper, name='ScanThread', args=args)
     t.daemon = True
-
+    scanAddId(scan_id, target_urls[0])
     t.start()
 
     # Wait until the thread starts
     scan_info_setup.wait()
-
     return jsonify({'message': 'Success',
                     'id': scan_id,
                     'href': '/scans/%s' % scan_id}), 201
